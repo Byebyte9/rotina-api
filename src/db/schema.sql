@@ -1,0 +1,19 @@
+CREATE TABLE IF NOT EXISTS users (
+  id SERIAL PRIMARY KEY,
+  email VARCHAR(255) UNIQUE NOT NULL,
+  senha_hash VARCHAR(255) NOT NULL,
+  nome VARCHAR(100) NOT NULL,
+  avatar_url TEXT,
+  is_founder BOOLEAN DEFAULT FALSE,
+  founder_position INTEGER,
+  is_premium BOOLEAN DEFAULT FALSE,
+  premium_expires_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_data (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  data JSONB NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW()
+);
