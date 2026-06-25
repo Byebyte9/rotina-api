@@ -161,4 +161,25 @@ async function updateProfile(request, reply) {
   }
 }
 
-module.exports = { register, login, me, deleteAccount, updateProfile }
+async function resetPassword(request, reply) {
+  const { email, novaSenha } = request.body
+  if (!email || !novaSenha) {
+    return reply.status(400).send({ error: 'Email e nova senha são obrigatórios' })
+  }
+  try {
+    // Verifica se o email existe
+    const check = await pool.query('SELECT id FROM users WHERE email = $1', [email.trim()])
+    if (check.rows.length === 0) {
+      return reply.status(404).send({ error: 'Email não encontrado' })
+    }
+    const bcrypt = require('bcrypt')
+    const hash = await bcrypt.hash(novaSenha, 10)
+    await pool.query('UPDATE users SET senha_hash = $1 WHERE email = $2', [hash, email.trim()])
+    return reply.send({ ok: true })
+  } catch (err) {
+    console.error('ERRO RESET PASSWORD:', err.message)
+    return reply.status(500).send({ error: 'Erro interno' })
+  }
+}
+
+module.exports = { register, login, me, deleteAccount, updateProfile, resetPassword }
