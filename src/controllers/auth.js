@@ -134,6 +134,8 @@ async function me(request, reply) {
 // Bug 7 fix: rota para deletar conta no servidor (LGPD)
 async function deleteAccount(request, reply) {
   try {
+    // Deleta dados do usuário primeiro (caso não haja ON DELETE CASCADE no banco)
+    await pool.query('DELETE FROM user_data WHERE user_id = $1', [request.user.id])
     await pool.query('DELETE FROM users WHERE id = $1', [request.user.id])
     return reply.send({ ok: true })
   } catch (err) {
