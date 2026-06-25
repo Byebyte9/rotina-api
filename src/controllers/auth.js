@@ -144,4 +144,21 @@ async function deleteAccount(request, reply) {
   }
 }
 
-module.exports = { register, login, me, deleteAccount }
+async function updateProfile(request, reply) {
+  const { nome } = request.body
+  if (!nome || !nome.trim()) {
+    return reply.status(400).send({ error: 'Nome é obrigatório' })
+  }
+  try {
+    const result = await pool.query(
+      'UPDATE users SET nome = $1 WHERE id = $2 RETURNING id, email, nome',
+      [nome.trim(), request.user.id]
+    )
+    return reply.send({ user: result.rows[0] })
+  } catch (err) {
+    console.error('ERRO UPDATE PROFILE:', err.message)
+    return reply.status(500).send({ error: 'Erro interno' })
+  }
+}
+
+module.exports = { register, login, me, deleteAccount, updateProfile }
