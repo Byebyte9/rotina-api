@@ -167,14 +167,15 @@ async function resetPassword(request, reply) {
     return reply.status(400).send({ error: 'Email e nova senha são obrigatórios' })
   }
   try {
+    const emailNorm = email.trim().toLowerCase()
     // Verifica se o email existe
-    const check = await pool.query('SELECT id FROM users WHERE email = $1', [email.trim()])
+    const check = await pool.query('SELECT id FROM users WHERE email = $1', [emailNorm])
     if (check.rows.length === 0) {
       return reply.status(404).send({ error: 'Email não encontrado' })
     }
     const bcrypt = require('bcrypt')
     const hash = await bcrypt.hash(novaSenha, 10)
-    await pool.query('UPDATE users SET senha_hash = $1 WHERE email = $2', [hash, email.trim()])
+    await pool.query('UPDATE users SET senha_hash = $1 WHERE email = $2', [hash, emailNorm])
     return reply.send({ ok: true })
   } catch (err) {
     console.error('ERRO RESET PASSWORD:', err.message)
