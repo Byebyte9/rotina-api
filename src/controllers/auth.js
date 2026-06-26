@@ -173,7 +173,7 @@ async function resetPassword(request, reply) {
     if (check.rows.length === 0) {
       return reply.status(404).send({ error: 'Email não encontrado' })
     }
-    const bcrypt = require('bcrypt')
+    // Usa o bcryptjs já importado no topo do arquivo (era bcrypt antes — bug)
     const hash = await bcrypt.hash(novaSenha, 10)
     await pool.query('UPDATE users SET senha_hash = $1 WHERE email = $2', [hash, emailNorm])
     return reply.send({ ok: true })
