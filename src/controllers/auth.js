@@ -4,12 +4,7 @@ const bcrypt = require('bcryptjs')
 async function register(request, reply) {
   const { email, nome, senha } = request.body
 
-  if (!email || !nome || !senha) {
-    return reply.status(400).send({ error: 'Email, nome e senha são obrigatórios' })
-  }
-
   try {
-    // Verifica se email já existe
     const existing = await pool.query(
       'SELECT id FROM users WHERE email = $1',
       [email.toLowerCase()]
@@ -20,8 +15,6 @@ async function register(request, reply) {
 
     const senhaHash = await bcrypt.hash(senha, 10)
 
-    // Bug 2 fix: usa INSERT com subquery atômica para evitar race condition
-    // no sistema de fundadores. O COUNT e o INSERT acontecem na mesma operação.
     const result = await pool.query(
       `INSERT INTO users (email, senha_hash, nome, is_founder, founder_position)
        SELECT $1, $2, $3,
@@ -31,7 +24,7 @@ async function register(request, reply) {
               ELSE NULL
          END
        RETURNING id, email, nome, is_founder, founder_position`,
-      [email.toLowerCase(), senhaHash, nome]
+      [email.toLowerCase(), senhaHash, nome.trim()]
     )
 
     const user = result.rows[0]
@@ -59,10 +52,6 @@ async function register(request, reply) {
 async function login(request, reply) {
   const { email, senha } = request.body
 
-  if (!email || !senha) {
-    return reply.status(400).send({ error: 'Email e senha são obrigatórios' })
-  }
-
   try {
     const result = await pool.query(
       `SELECT id, email, nome, senha_hash, is_founder, founder_position, is_premium
@@ -70,6 +59,7 @@ async function login(request, reply) {
       [email.toLowerCase()]
     )
 
+    // Resposta genérica — não revela se o email existe ou não
     if (result.rows.length === 0) {
       return reply.status(401).send({ error: 'Email ou senha incorretos' })
     }
@@ -98,7 +88,7 @@ async function login(request, reply) {
       }
     })
   } catch (err) {
-    console.error(err)
+    console.error('ERRO LOGIN:', err.message)
     return reply.status(500).send({ error: 'Erro interno' })
   }
 }
@@ -126,15 +116,13 @@ async function me(request, reply) {
       createdAt: user.created_at,
     })
   } catch (err) {
-    console.error(err)
+    console.error('ERRO ME:', err.message)
     return reply.status(500).send({ error: 'Erro interno' })
   }
 }
 
-// Bug 7 fix: rota para deletar conta no servidor (LGPD)
 async function deleteAccount(request, reply) {
   try {
-    // Deleta dados do usuário primeiro (caso não haja ON DELETE CASCADE no banco)
     await pool.query('DELETE FROM user_data WHERE user_id = $1', [request.user.id])
     await pool.query('DELETE FROM users WHERE id = $1', [request.user.id])
     return reply.send({ ok: true })
@@ -146,9 +134,6 @@ async function deleteAccount(request, reply) {
 
 async function updateProfile(request, reply) {
   const { nome } = request.body
-  if (!nome || !nome.trim()) {
-    return reply.status(400).send({ error: 'Nome é obrigatório' })
-  }
   try {
     const result = await pool.query(
       'UPDATE users SET nome = $1 WHERE id = $2 RETURNING id, email, nome',
@@ -161,26 +146,40 @@ async function updateProfile(request, reply) {
   }
 }
 
-async function resetPassword(request, reply) {
-  const { email, novaSenha } = request.body
-  if (!email || !novaSenha) {
-    return reply.status(400).send({ error: 'Email e nova senha são obrigatórios' })
-  }
+// Troca de senha segura — exige senha atual, só funciona autenticado
+async function changePassword(request, reply) {
+  const { senhaAtual, novaSenha } = request.body
+
   try {
-    const emailNorm = email.trim().toLowerCase()
-    // Verifica se o email existe
-    const check = await pool.query('SELECT id FROM users WHERE email = $1', [emailNorm])
-    if (check.rows.length === 0) {
-      return reply.status(404).send({ error: 'Email não encontrado' })
+    const result = await pool.query(
+      'SELECT senha_hash FROM users WHERE id = $1',
+      [request.user.id]
+    )
+
+    if (result.rows.length === 0) {
+      return reply.status(404).send({ error: 'Usuário não encontrado' })
     }
-    // Usa o bcryptjs já importado no topo do arquivo (era bcrypt antes — bug)
-    const hash = await bcrypt.hash(novaSenha, 10)
-    await pool.query('UPDATE users SET senha_hash = $1 WHERE email = $2', [hash, emailNorm])
+
+    const senhaCorreta = await bcrypt.compare(senhaAtual, result.rows[0].senha_hash)
+    if (!senhaCorreta) {
+      return reply.status(401).send({ error: 'Senha atual incorreta' })
+    }
+
+    if (senhaAtual === novaSenha) {
+      return reply.status(400).send({ error: 'A nova senha deve ser diferente da atual' })
+    }
+
+    const novoHash = await bcrypt.hash(novaSenha, 10)
+    await pool.query(
+      'UPDATE users SET senha_hash = $1 WHERE id = $2',
+      [novoHash, request.user.id]
+    )
+
     return reply.send({ ok: true })
   } catch (err) {
-    console.error('ERRO RESET PASSWORD:', err.message)
+    console.error('ERRO CHANGE PASSWORD:', err.message)
     return reply.status(500).send({ error: 'Erro interno' })
   }
 }
 
-module.exports = { register, login, me, deleteAccount, updateProfile, resetPassword }
+module.exports = { register, login, me, deleteAccount, updateProfile, changePassword }
