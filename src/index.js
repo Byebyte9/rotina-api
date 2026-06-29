@@ -1,13 +1,17 @@
 require('dotenv').config()
 const fastify = require('fastify')({ logger: true })
 
-// CORS restrito — só aceita o app e domínios conhecidos
+// Parseia application/x-www-form-urlencoded (formulário web de reset de senha)
+fastify.register(require('@fastify/formbody'))
+
+// CORS restrito
 fastify.register(require('@fastify/cors'), {
   origin: (origin, cb) => {
-    // Sem origin = requisição do app mobile (ok) ou ferramentas como curl
     if (!origin) return cb(null, true)
     const allowed = [
-      'https://rotina-api.up.railway.app',
+      'https://rotina.life',
+      'https://www.rotina.life',
+      'https://api.rotina.life',
       'https://byebyte9.github.io',
     ]
     if (allowed.includes(origin)) return cb(null, true)
@@ -16,10 +20,10 @@ fastify.register(require('@fastify/cors'), {
   methods: ['GET', 'POST', 'PATCH', 'DELETE'],
 })
 
-// Rate limiting global (fallback)
+// Rate limiting global
 fastify.register(require('@fastify/rate-limit'), {
   global: true,
-  max: 60,           // 60 requisições por minuto por IP (geral)
+  max: 60,
   timeWindow: '1 minute',
   errorResponseBuilder: () => ({
     error: 'Muitas requisições. Aguarde um momento e tente novamente.',
