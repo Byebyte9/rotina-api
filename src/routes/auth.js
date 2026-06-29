@@ -1,6 +1,7 @@
 const {
   register, login, me, deleteAccount, updateProfile, changePassword,
-  verifyEmail, resendVerification, forgotPassword, resetPasswordPage, resetPasswordSubmit,
+  verifyEmailCode, verifyEmailLink, resendVerification,
+  forgotPassword, resetPasswordPage, resetPasswordSubmit,
   feedback,
 } = require('../controllers/auth')
 const authMiddleware = require('../middleware/auth')
@@ -39,11 +40,26 @@ async function authRoutes(fastify) {
     handler: login,
   })
 
-  // ── Verificação de email (link clicado no email) ────────────────────────────
-  // GET: exibe resultado; chamado pelo link do email
-  fastify.get('/auth/verify-email', { handler: verifyEmail })
+  // ── Verificação de email ─────────────────────────────────────────────────────
+  // POST: app envia código de 6 dígitos (usuário autenticado)
+  fastify.post('/auth/verify-email', {
+    preHandler: authMiddleware,
+    config: { rateLimit: { max: 10, timeWindow: '5 minutes' } },
+    schema: {
+      body: {
+        type: 'object',
+        required: ['code'],
+        additionalProperties: false,
+        properties: { code: { type: 'string', pattern: '^\\d{6}$' } },
+      },
+    },
+    handler: verifyEmailCode,
+  })
 
-  // POST: reenvia o email de verificação (usuário autenticado)
+  // GET: link clicado no email → página web (fallback / compatibilidade)
+  fastify.get('/auth/verify-email', { handler: verifyEmailLink })
+
+  // POST: reenvia o código (usuário autenticado)
   fastify.post('/auth/resend-verification', {
     preHandler: authMiddleware,
     config: { rateLimit: { max: 3, timeWindow: '5 minutes' } },

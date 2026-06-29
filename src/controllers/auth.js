@@ -9,7 +9,12 @@ function generateToken() {
   return crypto.randomBytes(32).toString('hex')
 }
 
-// Fingerprint leve do dispositivo: hash de IP + User-Agent para comparar logins
+// Código numérico de 6 dígitos para verificação de email
+function generateVerificationCode() {
+  return String(Math.floor(100000 + Math.random() * 900000))
+}
+
+// Fingerprint leve do dispositivo
 function deviceFingerprint(request) {
   const ip = request.headers['x-forwarded-for']?.split(',')[0]?.trim()
     || request.socket?.remoteAddress
@@ -24,7 +29,6 @@ function extractDeviceInfo(request) {
     || 'desconhecido'
   const userAgent = request.headers['user-agent'] || null
 
-  // Formata UA de forma mais legível (ex: "Android 13 · com.rotina.app")
   let uaDisplay = null
   if (userAgent) {
     if (userAgent.includes('Dart')) uaDisplay = 'App Rotina (Flutter)'
@@ -72,16 +76,15 @@ async function register(request, reply) {
 
     const user = result.rows[0]
 
-    // Cria token de verificação de email (expira em 24h)
-    const verifyToken = generateToken()
+    // Código de 6 dígitos, expira em 15 min
+    const code = generateVerificationCode()
     await pool.query(
       `INSERT INTO email_verification_tokens (user_id, token, expires_at)
-       VALUES ($1, $2, NOW() + INTERVAL '24 hours')`,
-      [user.id, verifyToken]
+       VALUES ($1, $2, NOW() + INTERVAL '15 minutes')`,
+      [user.id, code]
     )
 
-    // Envia email de verificação em background (não bloqueia o cadastro)
-    sendVerificationEmail({ to: email.toLowerCase(), nome: nome.trim(), token: verifyToken })
+    sendVerificationEmail({ to: email.toLowerCase(), nome: nome.trim(), code })
       .catch(err => console.error('ERRO sendVerificationEmail:', err.message))
 
     const token = await reply.jwtSign(
@@ -131,28 +134,24 @@ async function login(request, reply) {
 
     // ── Detecção de novo dispositivo ────────────────────────────────────────
     const fingerprint = deviceFingerprint(request)
-
     const knownDevice = await pool.query(
       `SELECT id FROM known_devices WHERE user_id = $1 AND fingerprint = $2`,
       [user.id, fingerprint]
     )
 
     if (knownDevice.rows.length === 0) {
-      // Dispositivo novo — registra e envia alerta por email (se email verificado)
       await pool.query(
         `INSERT INTO known_devices (user_id, fingerprint, last_seen_at)
          VALUES ($1, $2, NOW())
          ON CONFLICT (user_id, fingerprint) DO UPDATE SET last_seen_at = NOW()`,
         [user.id, fingerprint]
       )
-
       if (user.email_verified) {
         const deviceInfo = extractDeviceInfo(request)
         sendNewDeviceEmail({ to: user.email, nome: user.nome, deviceInfo })
           .catch(err => console.error('ERRO sendNewDeviceEmail:', err.message))
       }
     } else {
-      // Atualiza last_seen do dispositivo conhecido
       await pool.query(
         `UPDATE known_devices SET last_seen_at = NOW()
          WHERE user_id = $1 AND fingerprint = $2`,
@@ -184,13 +183,56 @@ async function login(request, reply) {
   }
 }
 
-// ── Verificar email (link do email) ─────────────────────────────────────────
+// ── Verificar email via código (POST do app) ─────────────────────────────────
 
-async function verifyEmail(request, reply) {
+async function verifyEmailCode(request, reply) {
+  const { code } = request.body
+  const userId = request.user.id
+
+  if (!code || !/^\d{6}$/.test(code)) {
+    return reply.status(400).send({ error: 'Código inválido' })
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, expires_at, used
+       FROM email_verification_tokens
+       WHERE user_id = $1 AND token = $2
+       ORDER BY created_at DESC LIMIT 1`,
+      [userId, code]
+    )
+
+    if (result.rows.length === 0) {
+      return reply.status(400).send({ error: 'Código incorreto' })
+    }
+
+    const row = result.rows[0]
+
+    if (row.used) {
+      return reply.status(400).send({ error: 'Este código já foi usado. Solicite um novo.' })
+    }
+
+    if (new Date(row.expires_at) < new Date()) {
+      return reply.status(400).send({ error: 'Código expirado. Solicite um novo.' })
+    }
+
+    await pool.query('UPDATE users SET email_verified = TRUE WHERE id = $1', [userId])
+    await pool.query('UPDATE email_verification_tokens SET used = TRUE WHERE id = $1', [row.id])
+
+    return reply.send({ ok: true })
+  } catch (err) {
+    console.error('ERRO VERIFY EMAIL CODE:', err.message)
+    return reply.status(500).send({ error: 'Erro interno' })
+  }
+}
+
+// ── Verificar email via link (GET do email — mantido para compatibilidade) ────
+
+async function verifyEmailLink(request, reply) {
   const { token } = request.query
 
   if (!token) {
-    return reply.status(400).send(htmlPage('Link inválido', 'O link de verificação está incompleto.', false))
+    return reply.type('text/html').send(htmlPage('Link inválido', 'O link de verificação está incompleto.', false))
   }
 
   try {
@@ -202,7 +244,7 @@ async function verifyEmail(request, reply) {
     )
 
     if (result.rows.length === 0) {
-      return reply.type('text/html').send(htmlPage('Link inválido', 'Este link de verificação não existe ou já foi usado.', false))
+      return reply.type('text/html').send(htmlPage('Código inválido', 'Este código de verificação não existe ou já foi usado.', false))
     }
 
     const row = result.rows[0]
@@ -212,7 +254,7 @@ async function verifyEmail(request, reply) {
     }
 
     if (new Date(row.expires_at) < new Date()) {
-      return reply.type('text/html').send(htmlPage('Link expirado', 'Este link expirou. Abra o app e solicite um novo email de verificação.', false))
+      return reply.type('text/html').send(htmlPage('Código expirado', 'Este código expirou. Abra o app e solicite um novo email de verificação.', false))
     }
 
     await pool.query('UPDATE users SET email_verified = TRUE WHERE id = $1', [row.user_id])
@@ -220,12 +262,12 @@ async function verifyEmail(request, reply) {
 
     return reply.type('text/html').send(htmlPage('Email confirmado!', 'Seu email foi verificado com sucesso. Volte ao app e aproveite o Rotina.', true))
   } catch (err) {
-    console.error('ERRO VERIFY EMAIL:', err.message)
+    console.error('ERRO VERIFY EMAIL LINK:', err.message)
     return reply.type('text/html').send(htmlPage('Erro', 'Ocorreu um erro ao verificar seu email. Tente novamente.', false))
   }
 }
 
-// ── Reenviar verificação ─────────────────────────────────────────────────────
+// ── Reenviar código ──────────────────────────────────────────────────────────
 
 async function resendVerification(request, reply) {
   try {
@@ -244,20 +286,20 @@ async function resendVerification(request, reply) {
       return reply.send({ ok: true, message: 'Email já verificado' })
     }
 
-    // Invalida tokens anteriores
+    // Invalida códigos anteriores
     await pool.query(
       'UPDATE email_verification_tokens SET used = TRUE WHERE user_id = $1',
       [user.id]
     )
 
-    const verifyToken = generateToken()
+    const code = generateVerificationCode()
     await pool.query(
       `INSERT INTO email_verification_tokens (user_id, token, expires_at)
-       VALUES ($1, $2, NOW() + INTERVAL '24 hours')`,
-      [user.id, verifyToken]
+       VALUES ($1, $2, NOW() + INTERVAL '15 minutes')`,
+      [user.id, code]
     )
 
-    await sendVerificationEmail({ to: user.email, nome: user.nome, token: verifyToken })
+    await sendVerificationEmail({ to: user.email, nome: user.nome, code })
 
     return reply.send({ ok: true })
   } catch (err) {
@@ -271,7 +313,6 @@ async function resendVerification(request, reply) {
 async function forgotPassword(request, reply) {
   const { email } = request.body
 
-  // Resposta genérica — não revela se o email existe
   const genericOk = () => reply.send({ ok: true, message: 'Se este email estiver cadastrado, você receberá um link em breve.' })
 
   try {
@@ -286,7 +327,6 @@ async function forgotPassword(request, reply) {
 
     const user = result.rows[0]
 
-    // Invalida tokens anteriores
     await pool.query(
       'UPDATE password_reset_tokens SET used = TRUE WHERE user_id = $1',
       [user.id]
@@ -312,11 +352,9 @@ async function forgotPassword(request, reply) {
 
 async function resetPasswordPage(request, reply) {
   const { token } = request.query
-
   if (!token) {
     return reply.type('text/html').send(resetHtmlPage('Link inválido', null, 'O link está incompleto.'))
   }
-
   return reply.type('text/html').send(resetHtmlPage(null, token, null))
 }
 
@@ -351,8 +389,6 @@ async function resetPasswordSubmit(request, reply) {
     const novoHash = await bcrypt.hash(novaSenha, 10)
     await pool.query('UPDATE users SET senha_hash = $1 WHERE id = $2', [novoHash, row.user_id])
     await pool.query('UPDATE password_reset_tokens SET used = TRUE WHERE token = $1', [token])
-
-    // Invalida todos os dispositivos conhecidos para forçar novo login
     await pool.query('DELETE FROM known_devices WHERE user_id = $1', [row.user_id])
 
     return reply.type('text/html').send(htmlPage('Senha redefinida!', 'Sua senha foi atualizada com sucesso. Abra o app e faça login com a nova senha.', true))
@@ -371,11 +407,9 @@ async function me(request, reply) {
        FROM users WHERE id = $1`,
       [request.user.id]
     )
-
     if (result.rows.length === 0) {
       return reply.status(404).send({ error: 'Usuário não encontrado' })
     }
-
     const user = result.rows[0]
     return reply.send({
       id: user.id,
@@ -423,36 +457,43 @@ async function updateProfile(request, reply) {
 
 async function changePassword(request, reply) {
   const { senhaAtual, novaSenha } = request.body
-
   try {
     const result = await pool.query(
       'SELECT senha_hash FROM users WHERE id = $1',
       [request.user.id]
     )
-
     if (result.rows.length === 0) {
       return reply.status(404).send({ error: 'Usuário não encontrado' })
     }
-
     const senhaCorreta = await bcrypt.compare(senhaAtual, result.rows[0].senha_hash)
     if (!senhaCorreta) {
       return reply.status(401).send({ error: 'Senha atual incorreta' })
     }
-
     if (senhaAtual === novaSenha) {
       return reply.status(400).send({ error: 'A nova senha deve ser diferente da atual' })
     }
-
     const novoHash = await bcrypt.hash(novaSenha, 10)
-    await pool.query(
-      'UPDATE users SET senha_hash = $1 WHERE id = $2',
-      [novoHash, request.user.id]
-    )
-
+    await pool.query('UPDATE users SET senha_hash = $1 WHERE id = $2', [novoHash, request.user.id])
     return reply.send({ ok: true })
   } catch (err) {
     console.error('ERRO CHANGE PASSWORD:', err.message)
     return reply.status(500).send({ error: 'Erro interno' })
+  }
+}
+
+async function feedback(request, reply) {
+  const { tipo, mensagem } = request.body
+  try {
+    const userResult = await pool.query(
+      'SELECT email, nome FROM users WHERE id = $1',
+      [request.user.id]
+    )
+    const user = userResult.rows[0] || {}
+    await sendFeedbackEmail({ tipo, mensagem, userEmail: user.email, userName: user.nome })
+    return reply.send({ ok: true })
+  } catch (err) {
+    console.error('ERRO FEEDBACK:', err.message)
+    return reply.status(500).send({ error: 'Erro ao enviar feedback' })
   }
 }
 
@@ -474,9 +515,11 @@ function htmlPage(title, message, success) {
     .card { background:#3D2512; border:1px solid #5C3A20; border-radius:20px;
             padding:48px 36px; max-width:420px; width:100%; text-align:center; }
     .icon { font-size:48px; color:${iconColor}; margin-bottom:20px; }
-    h1 { font-size:22px; color:#F5ECD7; margin-bottom:12px; font-weight:600; }
+    h1 { font-size:22px; color:#F5ECD7; margin-bottom:12px; font-weight:600;
+         font-family:Georgia,serif; font-style:italic; }
     p { font-size:14px; color:#C4A882; line-height:1.7; }
-    .logo { font-size:14px; font-style:italic; color:#8A6A4A; margin-top:32px; }
+    .logo { font-size:14px; font-style:italic; color:#8A6A4A; margin-top:32px;
+            font-family:Georgia,serif; }
     .logo span { color:#C4A882; }
   </style>
 </head>
@@ -492,10 +535,7 @@ function htmlPage(title, message, success) {
 }
 
 function resetHtmlPage(errorTitle, token, errorMsg) {
-  if (errorTitle) {
-    return htmlPage(errorTitle, errorMsg, false)
-  }
-
+  if (errorTitle) return htmlPage(errorTitle, errorMsg, false)
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -508,9 +548,10 @@ function resetHtmlPage(errorTitle, token, errorMsg) {
            min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
     .card { background:#3D2512; border:1px solid #5C3A20; border-radius:20px;
             padding:40px 32px; max-width:420px; width:100%; }
-    h1 { font-size:20px; color:#F5ECD7; margin-bottom:8px; font-weight:600; }
+    h1 { font-size:20px; color:#F5ECD7; margin-bottom:8px; font-weight:600;
+         font-family:Georgia,serif; font-style:italic; }
     .sub { font-size:13px; color:#8A6A4A; margin-bottom:28px; }
-    label { display:block; font-size:11px; color:#5C3A20; font-weight:600;
+    label { display:block; font-size:11px; color:#8A6A4A; font-weight:600;
             letter-spacing:1px; margin-bottom:6px; text-transform:uppercase; }
     input { width:100%; background:#2C1A0E; border:1px solid #5C3A20; border-radius:10px;
             padding:13px 14px; color:#F5ECD7; font-size:14px; outline:none;
@@ -521,7 +562,8 @@ function resetHtmlPage(errorTitle, token, errorMsg) {
              font-family:inherit; letter-spacing:0.2px; }
     button:hover { background:#D4B892; }
     .req { font-size:12px; color:#8A6A4A; margin-top:-12px; margin-bottom:20px; }
-    .logo { font-size:13px; font-style:italic; color:#8A6A4A; margin-top:28px; text-align:center; }
+    .logo { font-size:13px; font-style:italic; color:#8A6A4A; margin-top:28px;
+            text-align:center; font-family:Georgia,serif; }
     .logo span { color:#C4A882; }
   </style>
 </head>
@@ -542,32 +584,9 @@ function resetHtmlPage(errorTitle, token, errorMsg) {
 </html>`
 }
 
-async function feedback(request, reply) {
-  const { tipo, mensagem } = request.body
-
-  try {
-    const userResult = await pool.query(
-      'SELECT email, nome FROM users WHERE id = $1',
-      [request.user.id]
-    )
-    const user = userResult.rows[0] || {}
-
-    await sendFeedbackEmail({
-      tipo,
-      mensagem,
-      userEmail: user.email,
-      userName: user.nome,
-    })
-
-    return reply.send({ ok: true })
-  } catch (err) {
-    console.error('ERRO FEEDBACK:', err.message)
-    return reply.status(500).send({ error: 'Erro ao enviar feedback' })
-  }
-}
-
 module.exports = {
   register, login, me, deleteAccount, updateProfile, changePassword,
-  verifyEmail, resendVerification, forgotPassword, resetPasswordPage, resetPasswordSubmit,
+  verifyEmailCode, verifyEmailLink, resendVerification,
+  forgotPassword, resetPasswordPage, resetPasswordSubmit,
   feedback,
 }
