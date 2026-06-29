@@ -1,7 +1,7 @@
 const { Resend } = require('resend')
 
 const resend = new Resend(process.env.RESEND_API_KEY)
-const FROM = 'Rotina <noreply@send.rotina.life>'
+const FROM = 'Rotina <noreply@rotina.life>'
 
 // ── SVG logo inline (leve, sem dependência externa) ──────────────────────────
 const LOGO_SVG = `<svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
