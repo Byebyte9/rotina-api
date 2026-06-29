@@ -118,12 +118,14 @@ async function sendVerificationEmail({ to, nome, code }) {
     </div>
   `)
 
-  return resend.emails.send({
+  const result = await resend.emails.send({
     from: FROM,
     to,
     subject: `${code} é seu código de verificação — Rotina`,
     html,
   })
+  if (result.error) throw new Error(`Resend error: ${JSON.stringify(result.error)}`)
+  return result
 }
 
 // ── Redefinição de senha ─────────────────────────────────────────────────────
@@ -149,12 +151,14 @@ async function sendPasswordResetEmail({ to, nome, token }) {
     </div>
   `)
 
-  return resend.emails.send({
+  const result = await resend.emails.send({
     from: FROM,
     to,
     subject: 'Redefinir senha — Rotina',
     html,
   })
+  if (result.error) throw new Error(`Resend error: ${JSON.stringify(result.error)}`)
+  return result
 }
 
 // ── Alerta de novo dispositivo ───────────────────────────────────────────────
@@ -181,12 +185,14 @@ async function sendNewDeviceEmail({ to, nome, deviceInfo }) {
     </div>
   `)
 
-  return resend.emails.send({
+  const result = await resend.emails.send({
     from: FROM,
     to,
     subject: 'Novo acesso à sua conta — Rotina',
     html,
   })
+  if (result.error) throw new Error(`Resend error: ${JSON.stringify(result.error)}`)
+  return result
 }
 
 // ── Feedback do app ──────────────────────────────────────────────────────────
@@ -204,13 +210,15 @@ async function sendFeedbackEmail({ tipo, mensagem, userEmail, userName }) {
     <p style="white-space:pre-wrap;background:#2C1A0E;border:1px solid #5C3A20;border-radius:10px;padding:16px;font-size:13px;color:#C4A882">${mensagem.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>
   `)
 
-  return resend.emails.send({
+  const result = await resend.emails.send({
     from: FROM,
     to: 'contact@rotina.life',
     reply_to: userEmail || undefined,
     subject: `[Feedback] ${tipoLabel} — Rotina`,
     html,
   })
+  if (result.error) throw new Error(`Resend error: ${JSON.stringify(result.error)}`)
+  return result
 }
 
 module.exports = { sendVerificationEmail, sendPasswordResetEmail, sendNewDeviceEmail, sendFeedbackEmail }

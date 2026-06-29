@@ -85,7 +85,8 @@ async function register(request, reply) {
     )
 
     sendVerificationEmail({ to: email.toLowerCase(), nome: nome.trim(), code })
-      .catch(err => console.error('ERRO sendVerificationEmail:', err.message))
+      .then(() => console.log(`[email] verificação enviada para ${email}`))
+      .catch(err => console.error('[email] ERRO sendVerificationEmail:', err.message, JSON.stringify(err)))
 
     const token = await reply.jwtSign(
       { id: user.id, email: user.email },

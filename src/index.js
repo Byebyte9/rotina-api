@@ -1,6 +1,22 @@
 require('dotenv').config()
 const fastify = require('fastify')({ logger: true })
 
+// Permite body vazio em POSTs — sem isso o Fastify rejeita com 400
+// quando o app manda Content-Type: application/json mas sem payload
+fastify.addContentTypeParser(
+  'application/json',
+  { parseAs: 'string' },
+  function (req, body, done) {
+    if (!body || body.trim() === '') return done(null, {})
+    try {
+      done(null, JSON.parse(body))
+    } catch (err) {
+      err.statusCode = 400
+      done(err)
+    }
+  }
+)
+
 // Parseia application/x-www-form-urlencoded (formulário web de reset de senha)
 fastify.register(require('@fastify/formbody'))
 

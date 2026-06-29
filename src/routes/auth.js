@@ -62,7 +62,7 @@ async function authRoutes(fastify) {
   // POST: reenvia o código (usuário autenticado)
   fastify.post('/auth/resend-verification', {
     preHandler: authMiddleware,
-    config: { rateLimit: { max: 3, timeWindow: '5 minutes' } },
+    config: { rateLimit: { max: 5, timeWindow: '2 minutes' } },
     handler: resendVerification,
   })
 
